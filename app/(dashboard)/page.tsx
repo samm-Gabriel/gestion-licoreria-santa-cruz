@@ -3,16 +3,50 @@
 import Link from 'next/link'
 import useSWR from 'swr'
 import { listProductos, listVentas } from '@/lib/api'
-import { ArrowUpRight, Package, TriangleAlert, Banknote, Truck, ShoppingCart, ReceiptText, Plus } from 'lucide-react'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  ArrowUpRight,
+  Package,
+  TriangleAlert,
+  Banknote,
+  Truck,
+  ShoppingCart,
+  ReceiptText,
+  Plus,
+} from 'lucide-react'
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+} from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 
 const shortcuts = [
-  { title: 'Registrar producto', description: 'Agrega artículos al inventario.', href: '/productos/nuevo', icon: Package },
-  { title: 'Nueva compra', description: 'Registra una reposición de stock.', href: '/compras/nueva', icon: ShoppingCart },
-  { title: 'Nueva venta', description: 'Registra una venta de mostrador.', href: '/ventas/nueva', icon: ReceiptText },
-  { title: 'Proveedores', description: 'Consulta y administra contactos.', href: '/proveedores', icon: Truck },
+  {
+    title: 'Registrar producto',
+    description: 'Agrega artículos al inventario.',
+    href: '/productos/nuevo',
+    icon: Package,
+  },
+  {
+    title: 'Nueva compra',
+    description: 'Registra una reposición de stock.',
+    href: '/compras/nueva',
+    icon: ShoppingCart,
+  },
+  {
+    title: 'Nueva venta',
+    description: 'Registra una venta de mostrador.',
+    href: '/ventas/nueva',
+    icon: ReceiptText,
+  },
+  {
+    title: 'Proveedores',
+    description: 'Consulta y administra contactos.',
+    href: '/proveedores',
+    icon: Truck,
+  },
 ]
 
 function todayISO() {
@@ -25,10 +59,18 @@ function money(value: number) {
 
 export default function DashboardPage() {
   const hoy = todayISO()
-  const { data: productosData } = useSWR('dashboard-productos', () =>
+  const {
+    data: productosData,
+    error: productosError,
+    isLoading: productosLoading,
+  } = useSWR('dashboard-productos', () =>
     listProductos({ pageSize: 100, activo: true }).then((r) => r.data)
   )
-  const { data: ventasData } = useSWR(['dashboard-ventas', hoy], () =>
+  const {
+    data: ventasData,
+    error: ventasError,
+    isLoading: ventasLoading,
+  } = useSWR(['dashboard-ventas', hoy], () =>
     listVentas({ desde: hoy, hasta: hoy, pageSize: 100 }).then((r) => r.data)
   )
 
@@ -38,25 +80,26 @@ export default function DashboardPage() {
     (p) => Number(p.stock ?? 0) <= Number(p.stockMinimo ?? 0)
   )
   const cajaDelDia = ventas.reduce((acc, v) => acc + Number(v.total ?? 0), 0)
+  const dashboardError = productosError || ventasError
 
   const stats = [
     {
       title: 'Productos activos',
-      value: productosData ? String(products.length) : '—',
+      value: productosLoading ? '…' : productosData ? String(products.length) : '—',
       note: 'Catálogo disponible para venta',
       icon: Package,
       href: '/productos',
     },
     {
       title: 'Alertas de stock mínimo',
-      value: productosData ? String(lowStock.length) : '—',
+      value: productosLoading ? '…' : productosData ? String(lowStock.length) : '—',
       note: 'Productos por reponer',
       icon: TriangleAlert,
       href: '/productos',
     },
     {
       title: 'Caja del día',
-      value: ventasData ? money(cajaDelDia) : '—',
+      value: ventasLoading ? '…' : ventasData ? money(cajaDelDia) : '—',
       note: `${ventas.length} venta${ventas.length === 1 ? '' : 's'} hoy`,
       icon: Banknote,
       href: '/ventas',
@@ -80,6 +123,14 @@ export default function DashboardPage() {
           Registrar venta
         </Button>
       </header>
+
+      {dashboardError && (
+        <Card>
+          <CardContent className="p-4 text-sm text-destructive">
+            {dashboardError.message || 'No se pudo cargar el tablero.'}
+          </CardContent>
+        </Card>
+      )}
 
       <section aria-label="Resumen" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {stats.map(({ title, value, note, icon: Icon, href }) => (
@@ -110,9 +161,17 @@ export default function DashboardPage() {
             Ver inventario
           </Button>
         </div>
-        {productosData == null ? (
+        {productosLoading ? (
           <Card>
-            <CardContent className="p-6 text-sm text-muted-foreground">Cargando alertas…</CardContent>
+            <CardContent className="p-6 text-sm text-muted-foreground">
+              Cargando alertas…
+            </CardContent>
+          </Card>
+        ) : productosError ? (
+          <Card>
+            <CardContent className="p-6 text-sm text-destructive">
+              {productosError.message || 'No se pudieron cargar las alertas.'}
+            </CardContent>
           </Card>
         ) : lowStock.length === 0 ? (
           <Card>
@@ -154,7 +213,9 @@ export default function DashboardPage() {
       <section>
         <div className="mb-4">
           <h2 className="text-lg font-semibold">Accesos rápidos</h2>
-          <p className="text-sm text-muted-foreground">Continúa con las tareas más frecuentes.</p>
+          <p className="text-sm text-muted-foreground">
+            Continúa con las tareas más frecuentes.
+          </p>
         </div>
         <div className="grid gap-3 sm:grid-cols-2">
           {shortcuts.map(({ title, description, href, icon: Icon }) => (

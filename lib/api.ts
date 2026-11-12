@@ -19,7 +19,7 @@ import type {
 export type ApiRecord = Record<string, unknown>;
 
 interface ApiErrorBody {
-  error?: { message?: string };
+  error?: { message?: string; code?: string; details?: unknown };
 }
 
 interface UiListParams {
@@ -61,6 +61,13 @@ function toListParams(params?: UiListParams): ListParams | undefined {
   )
     out.activo = "false";
   return out;
+}
+
+function optionalText(value: unknown): string | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  const s = String(value).trim();
+  return s === "" ? null : s;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -187,13 +194,12 @@ export async function crearCompra(
   body: CompraCrear | ApiRecord
 ): Promise<{ data: Compra }> {
   const raw = body as ApiRecord;
+  const fecha = optionalText(raw.fecha);
   const payload: CompraCrear = {
     proveedorId: Number(raw.proveedorId),
-    fecha: raw.fecha ? String(raw.fecha) : undefined,
-    numeroFactura:
-      raw.numeroFactura != null ? String(raw.numeroFactura) : null,
-    observaciones:
-      raw.observaciones != null ? String(raw.observaciones) : null,
+    ...(fecha ? { fecha } : {}),
+    numeroFactura: optionalText(raw.numeroFactura) ?? null,
+    observaciones: optionalText(raw.observaciones) ?? null,
     lineas: (Array.isArray(raw.lineas) ? raw.lineas : []).map((line) => {
       const l = line as ApiRecord;
       return {
@@ -245,7 +251,7 @@ export async function crearVenta(
 ): Promise<{ data: Venta }> {
   const raw = body as ApiRecord;
   const payload: VentaCrear = {
-    fecha: raw.fecha ? String(raw.fecha) : undefined,
+    ...(raw.fecha ? { fecha: String(raw.fecha) } : {}),
     lineas: (Array.isArray(raw.lineas) ? raw.lineas : []).map((line) => {
       const l = line as ApiRecord;
       return {
