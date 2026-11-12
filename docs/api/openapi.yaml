@@ -1,0 +1,858 @@
+openapi: 3.1.0
+info:
+  title: API Gestión Licorería Santa Cruz
+  version: 1.0.0
+  description: |
+    API REST para inventario, proveedores, compras y ventas de licorería (historia #2).
+
+    **Convenciones**
+
+    - Respuestas exitosas: `{ "data": ... }`. Listados paginados incluyen `meta` con `{ page, pageSize, total, totalPages }`.
+    - Errores: `{ "error": { "code", "message", "details?" } }`. En `VALIDACION`, `details` es `[{ campo, mensaje }]`.
+    - Montos (`precioVenta`, `costoUnitario`, `subtotal`, `total`) se serializan como string decimal (ej. `"125.50"`).
+    - Fechas de compra en cuerpo/consulta: `AAAA-MM-DD`. `fecha` de venta al crear admite ISO 8601 con offset.
+    - `createdAt`/`updatedAt` en ISO 8601 UTC. Compra.`fecha` es medianoche UTC del día calendario.
+    - Ids de ruta: enteros positivos; si no, 400 `VALIDACION`.
+    - Errores no controlados: 500 `ERROR_INTERNO`.
+
+    **Stock**
+
+    - POST `/compras` incrementa stock por línea.
+    - DELETE `/compras/{id}` revierte stock si hay suficiente; si no, 409 `CONFLICTO`.
+    - POST `/ventas` decrementa stock; si falta, 409 `SIN_STOCK` con `details.productos`.
+    - DELETE `/ventas/{id}` devuelve stock. PATCH en ventas responde 400 `VALIDACION`.
+  contact:
+    name: gestion-licoreria-santa-cruz
+servers:
+  - url: /api
+    description: Mismo origen que la aplicación Next.js
+security: []
+tags:
+  - name: Productos
+  - name: Proveedores
+  - name: Compras
+  - name: Ventas
+
+paths:
+  /productos:
+    get:
+      tags: [Productos]
+      operationId: listarProductos
+      summary: Listar productos
+      parameters:
+        - $ref: '#/components/parameters/Q'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Activo'
+        - name: categoria
+          in: query
+          schema: { type: string, maxLength: 80 }
+      responses:
+        '200':
+          description: Página de productos
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Producto' }
+                  meta: { $ref: '#/components/schemas/MetaPaginacion' }
+              example:
+                data:
+                  - id: 1
+                    codigo: RON-001
+                    nombre: Ron Abuelo Añejo 750ml
+                    marca: Abuelo
+                    categoria: Ron
+                    precioVenta: '85.00'
+                    stock: 24
+                    stockMinimo: 5
+                    activo: true
+                    createdAt: '2026-11-12T00:00:00.000Z'
+                    updatedAt: '2026-11-12T00:00:00.000Z'
+                meta: { page: 1, pageSize: 20, total: 1, totalPages: 1 }
+        '400': { $ref: '#/components/responses/Validacion' }
+        '500': { $ref: '#/components/responses/ErrorInterno' }
+    post:
+      tags: [Productos]
+      operationId: crearProducto
+      summary: Registrar un producto
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProductoCrear' }
+            example:
+              codigo: VIN-001
+              nombre: Vino Casillero del Diablo
+              categoria: Vino
+              precioVenta: '45.00'
+              stock: 0
+      responses:
+        '201':
+          description: Producto creado
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/Producto' }
+        '400': { $ref: '#/components/responses/ValidacionCuerpo' }
+        '409':
+          description: Código duplicado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error:
+                  code: CODIGO_DUPLICADO
+                  message: Ya existe un producto con código VIN-001
+                  details: { productoId: 2 }
+        '500': { $ref: '#/components/responses/ErrorInterno' }
+
+  /productos/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [Productos]
+      operationId: obtenerProducto
+      summary: Obtener un producto
+      description: Incluye `_count.lineasCompra` y `_count.lineasVenta`.
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/ProductoDetalle' }
+        '400': { $ref: '#/components/responses/IdInvalido' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '500': { $ref: '#/components/responses/ErrorInterno' }
+    patch:
+      tags: [Productos]
+      operationId: actualizarProducto
+      summary: Actualizar un producto
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProductoActualizar' }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/Producto' }
+        '400': { $ref: '#/components/responses/ValidacionCuerpo' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409': { $ref: '#/components/responses/CodigoDuplicado' }
+        '500': { $ref: '#/components/responses/ErrorInterno' }
+    delete:
+      tags: [Productos]
+      operationId: eliminarProducto
+      summary: Eliminar un producto
+      description: Solo si no tiene líneas en compras ni ventas.
+      responses:
+        '200': { $ref: '#/components/responses/Eliminado' }
+        '400': { $ref: '#/components/responses/IdInvalido' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409': { $ref: '#/components/responses/EnUso' }
+        '500': { $ref: '#/components/responses/ErrorInterno' }
+
+  /proveedores:
+    get:
+      tags: [Proveedores]
+      operationId: listarProveedores
+      summary: Listar proveedores
+      parameters:
+        - $ref: '#/components/parameters/Q'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Activo'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Proveedor' }
+                  meta: { $ref: '#/components/schemas/MetaPaginacion' }
+        '400': { $ref: '#/components/responses/Validacion' }
+        '500': { $ref: '#/components/responses/ErrorInterno' }
+    post:
+      tags: [Proveedores]
+      operationId: crearProveedor
+      summary: Registrar un proveedor
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProveedorCrear' }
+            example:
+              nombre: Distribuidora Andina S.R.L.
+              nit: '1020304050'
+              telefono: '+591 71234567'
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/Proveedor' }
+        '400': { $ref: '#/components/responses/ValidacionCuerpo' }
+        '409': { $ref: '#/components/responses/NitDuplicado' }
+        '500': { $ref: '#/components/responses/ErrorInterno' }
+
+  /proveedores/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [Proveedores]
+      operationId: obtenerProveedor
+      summary: Obtener un proveedor
+      description: Incluye `_count.compras`.
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/ProveedorDetalle' }
+        '400': { $ref: '#/components/responses/IdInvalido' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '500': { $ref: '#/components/responses/ErrorInterno' }
+    patch:
+      tags: [Proveedores]
+      operationId: actualizarProveedor
+      summary: Actualizar un proveedor
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProveedorActualizar' }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/Proveedor' }
+        '400': { $ref: '#/components/responses/ValidacionCuerpo' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409': { $ref: '#/components/responses/NitDuplicado' }
+        '500': { $ref: '#/components/responses/ErrorInterno' }
+    delete:
+      tags: [Proveedores]
+      operationId: eliminarProveedor
+      summary: Eliminar un proveedor
+      description: Solo si no tiene compras.
+      responses:
+        '200': { $ref: '#/components/responses/Eliminado' }
+        '400': { $ref: '#/components/responses/IdInvalido' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409': { $ref: '#/components/responses/EnUso' }
+        '500': { $ref: '#/components/responses/ErrorInterno' }
+
+  /compras:
+    get:
+      tags: [Compras]
+      operationId: listarCompras
+      summary: Listar compras
+      parameters:
+        - $ref: '#/components/parameters/Q'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: proveedorId
+          in: query
+          schema: { type: integer, minimum: 1 }
+        - name: desde
+          in: query
+          schema: { $ref: '#/components/schemas/FechaCalendario' }
+        - name: hasta
+          in: query
+          schema: { $ref: '#/components/schemas/FechaCalendario' }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Compra' }
+                  meta: { $ref: '#/components/schemas/MetaPaginacion' }
+        '400': { $ref: '#/components/responses/Validacion' }
+        '500': { $ref: '#/components/responses/ErrorInterno' }
+    post:
+      tags: [Compras]
+      operationId: crearCompra
+      summary: Registrar una compra
+      description: Suma stock de cada producto. Proveedor debe existir y estar activo.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CompraCrear' }
+            example:
+              proveedorId: 1
+              fecha: '2026-11-10'
+              numeroFactura: F-1001
+              lineas:
+                - productoId: 1
+                  cantidad: 12
+                  costoUnitario: '62.50'
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/Compra' }
+        '400': { $ref: '#/components/responses/ValidacionCuerpo' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '422': { $ref: '#/components/responses/Inactivo' }
+        '500': { $ref: '#/components/responses/ErrorInterno' }
+
+  /compras/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [Compras]
+      operationId: obtenerCompra
+      summary: Obtener una compra con líneas
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/Compra' }
+        '400': { $ref: '#/components/responses/IdInvalido' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '500': { $ref: '#/components/responses/ErrorInterno' }
+    patch:
+      tags: [Compras]
+      operationId: actualizarCompra
+      summary: Actualizar cabecera de compra
+      description: Solo fecha, número de factura y observaciones; no modifica líneas ni stock.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CompraActualizar' }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/Compra' }
+        '400': { $ref: '#/components/responses/ValidacionCuerpo' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '500': { $ref: '#/components/responses/ErrorInterno' }
+    delete:
+      tags: [Compras]
+      operationId: anularCompra
+      summary: Anular compra y revertir stock
+      responses:
+        '200': { $ref: '#/components/responses/Eliminado' }
+        '400': { $ref: '#/components/responses/IdInvalido' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409':
+          description: Stock insuficiente para revertir
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error:
+                  code: CONFLICTO
+                  message: No se puede anular la compra
+                  details: { productoId: 1, stock: 2, cantidad: 12 }
+        '500': { $ref: '#/components/responses/ErrorInterno' }
+
+  /ventas:
+    get:
+      tags: [Ventas]
+      operationId: listarVentas
+      summary: Listar ventas
+      parameters:
+        - $ref: '#/components/parameters/Q'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: desde
+          in: query
+          schema: { $ref: '#/components/schemas/FechaCalendario' }
+        - name: hasta
+          in: query
+          schema: { $ref: '#/components/schemas/FechaCalendario' }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Venta' }
+                  meta: { $ref: '#/components/schemas/MetaPaginacion' }
+        '400': { $ref: '#/components/responses/Validacion' }
+        '500': { $ref: '#/components/responses/ErrorInterno' }
+    post:
+      tags: [Ventas]
+      operationId: crearVenta
+      summary: Registrar una venta
+      description: |
+        Si no se envía `precioUnitario` en una línea, usa `precioVenta` del producto.
+        Productos activos con stock suficiente.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VentaCrear' }
+            example:
+              lineas:
+                - productoId: 1
+                  cantidad: 2
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/Venta' }
+        '400': { $ref: '#/components/responses/ValidacionCuerpo' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409': { $ref: '#/components/responses/SinStock' }
+        '422': { $ref: '#/components/responses/Inactivo' }
+        '500': { $ref: '#/components/responses/ErrorInterno' }
+
+  /ventas/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [Ventas]
+      operationId: obtenerVenta
+      summary: Obtener una venta con líneas
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/Venta' }
+        '400': { $ref: '#/components/responses/IdInvalido' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '500': { $ref: '#/components/responses/ErrorInterno' }
+    patch:
+      tags: [Ventas]
+      operationId: actualizarVenta
+      summary: No permitido
+      description: Siempre responde 400; anular con DELETE.
+      responses:
+        '400':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error:
+                  code: VALIDACION
+                  message: Las ventas no admiten actualización; anula con DELETE si corresponde
+        '500': { $ref: '#/components/responses/ErrorInterno' }
+    delete:
+      tags: [Ventas]
+      operationId: anularVenta
+      summary: Anular venta y devolver stock
+      responses:
+        '200': { $ref: '#/components/responses/Eliminado' }
+        '400': { $ref: '#/components/responses/IdInvalido' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '500': { $ref: '#/components/responses/ErrorInterno' }
+
+components:
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1 }
+      example: 1
+    Q:
+      name: q
+      in: query
+      schema: { type: string, maxLength: 100 }
+    Page:
+      name: page
+      in: query
+      schema: { type: integer, minimum: 1, default: 1 }
+    PageSize:
+      name: pageSize
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    Activo:
+      name: activo
+      in: query
+      schema: { type: string, enum: ['true', 'false'] }
+
+  schemas:
+    FechaCalendario:
+      type: string
+      pattern: '^\d{4}-\d{2}-\d{2}$'
+      examples: ['2026-11-10']
+    Decimal:
+      type: string
+      description: Monto con hasta 2 decimales.
+      pattern: '^\d{1,12}(\.\d{1,2})?$'
+      examples: ['125.50']
+    Instante:
+      type: string
+      format: date-time
+    MetaPaginacion:
+      type: object
+      required: [page, pageSize, total, totalPages]
+      properties:
+        page: { type: integer }
+        pageSize: { type: integer }
+        total: { type: integer }
+        totalPages: { type: integer }
+    CodigoError:
+      type: string
+      enum:
+        - VALIDACION
+        - JSON_INVALIDO
+        - NO_ENCONTRADO
+        - CONFLICTO
+        - CODIGO_DUPLICADO
+        - NIT_DUPLICADO
+        - EN_USO
+        - SIN_STOCK
+        - INACTIVO
+        - ERROR_INTERNO
+    DetalleValidacion:
+      type: object
+      required: [campo, mensaje]
+      properties:
+        campo: { type: string }
+        mensaje: { type: string }
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { $ref: '#/components/schemas/CodigoError' }
+            message: { type: string }
+            details: {}
+    ProductoResumen:
+      type: object
+      properties:
+        id: { type: integer }
+        codigo: { type: string }
+        nombre: { type: string }
+    Producto:
+      type: object
+      required: [id, codigo, nombre, precioVenta, stock, stockMinimo, activo, createdAt, updatedAt]
+      properties:
+        id: { type: integer }
+        codigo: { type: string }
+        nombre: { type: string }
+        marca: { type: [string, 'null'] }
+        categoria: { type: [string, 'null'] }
+        precioVenta: { $ref: '#/components/schemas/Decimal' }
+        stock: { type: integer }
+        stockMinimo: { type: integer }
+        activo: { type: boolean }
+        createdAt: { $ref: '#/components/schemas/Instante' }
+        updatedAt: { $ref: '#/components/schemas/Instante' }
+    ProductoDetalle:
+      allOf:
+        - $ref: '#/components/schemas/Producto'
+        - type: object
+          properties:
+            _count:
+              type: object
+              properties:
+                lineasCompra: { type: integer }
+                lineasVenta: { type: integer }
+    ProductoCrear:
+      type: object
+      required: [codigo, nombre, precioVenta]
+      properties:
+        codigo: { type: string, maxLength: 40 }
+        nombre: { type: string, maxLength: 160 }
+        marca: { type: [string, 'null'], maxLength: 80 }
+        categoria: { type: [string, 'null'], maxLength: 80 }
+        precioVenta: { oneOf: [{ type: number }, { type: string }] }
+        stock: { type: integer, minimum: 0, default: 0 }
+        stockMinimo: { type: integer, minimum: 0, default: 5 }
+        activo: { type: boolean, default: true }
+    ProductoActualizar:
+      type: object
+      minProperties: 1
+      properties:
+        codigo: { type: string }
+        nombre: { type: string }
+        marca: { type: [string, 'null'] }
+        categoria: { type: [string, 'null'] }
+        precioVenta: { oneOf: [{ type: number }, { type: string }] }
+        stockMinimo: { type: integer }
+        activo: { type: boolean }
+    Proveedor:
+      type: object
+      required: [id, nombre, activo, createdAt, updatedAt]
+      properties:
+        id: { type: integer }
+        nombre: { type: string }
+        nit: { type: [string, 'null'] }
+        telefono: { type: [string, 'null'] }
+        email: { type: [string, 'null'] }
+        direccion: { type: [string, 'null'] }
+        activo: { type: boolean }
+        createdAt: { $ref: '#/components/schemas/Instante' }
+        updatedAt: { $ref: '#/components/schemas/Instante' }
+    ProveedorDetalle:
+      allOf:
+        - $ref: '#/components/schemas/Proveedor'
+        - type: object
+          properties:
+            _count:
+              type: object
+              properties:
+                compras: { type: integer }
+    ProveedorCrear:
+      type: object
+      required: [nombre]
+      properties:
+        nombre: { type: string, maxLength: 160 }
+        nit: { type: [string, 'null'], maxLength: 20 }
+        telefono: { type: [string, 'null'] }
+        email: { type: [string, 'null'], format: email }
+        direccion: { type: [string, 'null'] }
+        activo: { type: boolean, default: true }
+    ProveedorActualizar:
+      type: object
+      minProperties: 1
+      properties:
+        nombre: { type: string }
+        nit: { type: [string, 'null'] }
+        telefono: { type: [string, 'null'] }
+        email: { type: [string, 'null'] }
+        direccion: { type: [string, 'null'] }
+        activo: { type: boolean }
+    CompraLinea:
+      type: object
+      properties:
+        id: { type: integer }
+        compraId: { type: integer }
+        productoId: { type: integer }
+        cantidad: { type: integer }
+        costoUnitario: { $ref: '#/components/schemas/Decimal' }
+        subtotal: { $ref: '#/components/schemas/Decimal' }
+        producto: { $ref: '#/components/schemas/ProductoResumen' }
+        createdAt: { $ref: '#/components/schemas/Instante' }
+        updatedAt: { $ref: '#/components/schemas/Instante' }
+    Compra:
+      type: object
+      properties:
+        id: { type: integer }
+        proveedorId: { type: integer }
+        proveedor: { $ref: '#/components/schemas/Proveedor' }
+        fecha: { $ref: '#/components/schemas/Instante' }
+        numeroFactura: { type: [string, 'null'] }
+        observaciones: { type: [string, 'null'] }
+        total: { $ref: '#/components/schemas/Decimal' }
+        lineas:
+          type: array
+          items: { $ref: '#/components/schemas/CompraLinea' }
+        createdAt: { $ref: '#/components/schemas/Instante' }
+        updatedAt: { $ref: '#/components/schemas/Instante' }
+    CompraLineaCrear:
+      type: object
+      required: [productoId, cantidad, costoUnitario]
+      properties:
+        productoId: { type: integer, minimum: 1 }
+        cantidad: { type: integer, minimum: 1 }
+        costoUnitario: { oneOf: [{ type: number }, { type: string }] }
+    CompraCrear:
+      type: object
+      required: [proveedorId, lineas]
+      properties:
+        proveedorId: { type: integer, minimum: 1 }
+        fecha: { $ref: '#/components/schemas/FechaCalendario' }
+        numeroFactura: { type: [string, 'null'] }
+        observaciones: { type: [string, 'null'] }
+        lineas:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/CompraLineaCrear' }
+    CompraActualizar:
+      type: object
+      minProperties: 1
+      properties:
+        fecha: { $ref: '#/components/schemas/FechaCalendario' }
+        numeroFactura: { type: [string, 'null'] }
+        observaciones: { type: [string, 'null'] }
+    VentaLinea:
+      type: object
+      properties:
+        id: { type: integer }
+        ventaId: { type: integer }
+        productoId: { type: integer }
+        cantidad: { type: integer }
+        precioUnitario: { $ref: '#/components/schemas/Decimal' }
+        subtotal: { $ref: '#/components/schemas/Decimal' }
+        producto: { $ref: '#/components/schemas/ProductoResumen' }
+        createdAt: { $ref: '#/components/schemas/Instante' }
+        updatedAt: { $ref: '#/components/schemas/Instante' }
+    Venta:
+      type: object
+      properties:
+        id: { type: integer }
+        fecha: { $ref: '#/components/schemas/Instante' }
+        total: { $ref: '#/components/schemas/Decimal' }
+        lineas:
+          type: array
+          items: { $ref: '#/components/schemas/VentaLinea' }
+        createdAt: { $ref: '#/components/schemas/Instante' }
+        updatedAt: { $ref: '#/components/schemas/Instante' }
+    VentaLineaCrear:
+      type: object
+      required: [productoId, cantidad]
+      properties:
+        productoId: { type: integer, minimum: 1 }
+        cantidad: { type: integer, minimum: 1 }
+        precioUnitario: { oneOf: [{ type: number }, { type: string }] }
+    VentaCrear:
+      type: object
+      required: [lineas]
+      properties:
+        fecha: { type: string, format: date-time }
+        lineas:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/VentaLineaCrear' }
+
+  responses:
+    Validacion:
+      description: Parámetros de consulta inválidos
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error: { code: VALIDACION, message: Los datos enviados no son válidos, details: [{ campo: page, mensaje: page debe ser 1 o mayor }] }
+    ValidacionCuerpo:
+      description: Cuerpo JSON inválido
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    IdInvalido:
+      description: Id de ruta inválido
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error: { code: VALIDACION, message: El id debe ser un número entero positivo }
+    NoEncontrado:
+      description: Recurso no existe
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error: { code: NO_ENCONTRADO, message: El registro solicitado no existe }
+    ErrorInterno:
+      description: Error del servidor
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error: { code: ERROR_INTERNO, message: Ocurrió un error interno en el servidor }
+    Eliminado:
+      description: Recurso eliminado
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data]
+            properties:
+              data:
+                type: object
+                required: [id]
+                properties:
+                  id: { type: integer }
+          example:
+            data: { id: 1 }
+    CodigoDuplicado:
+      description: Código de producto duplicado
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NitDuplicado:
+      description: NIT de proveedor duplicado
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error: { code: NIT_DUPLICADO, message: Ya existe un proveedor con ese NIT }
+    EnUso:
+      description: No se puede eliminar por dependencias
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error: { code: EN_USO, message: No se puede eliminar porque tiene registros asociados }
+    Inactivo:
+      description: Entidad inactiva
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error: { code: INACTIVO, message: El proveedor está inactivo y no se pueden registrar compras }
+    SinStock:
+      description: Stock insuficiente
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error:
+              code: SIN_STOCK
+              message: No hay stock suficiente para completar la venta
+              details:
+                productos:
+                  - productoId: 1
+                    nombre: Ron Abuelo
+                    stock: 1
+                    solicitado: 5
